@@ -133,7 +133,7 @@ def _main():
                                              rescale = 1./255,
                                              width_shift_range = 0.2,
                                              height_shift_range=0.2,
-                                             brightness_range=[0.7, 1.3], # Simulates shadows/sun
+                                            brightness_range=[0.7, 1.3], # Simulates shadows/sun
                                              zoom_range=[0.9, 1.1]       # Simulates distance
                                              )
     # --------------------------------------------------------------------

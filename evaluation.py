@@ -5,6 +5,7 @@ import sys
 import glob
 from random import randint
 from sklearn import metrics
+import itertools # Added for matrix plotting iteration
 
 # Try to import matplotlib for plotting
 try:
@@ -15,10 +16,10 @@ try:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     MATPLOTLIB_AVAILABLE = True
-    print("Matplotlib imported successfully. PR curve will be generated.")
+    print("Matplotlib imported successfully. Plots will be generated.")
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
-    print("Warning: Matplotlib not found. PR curve will not be generated. Install with 'pip install matplotlib'")
+    print("Warning: Matplotlib not found. Plots will not be generated. Install with 'pip install matplotlib'")
 
 
 from keras import backend as K
@@ -111,15 +112,21 @@ def read_training_labels(file_name):
 
 
 def count_samples_per_class(train_dir):
-    experiments = glob.glob(train_dir + "/*")
+    # Changed to os.path.join for Windows compatibility
+    experiments = glob.glob(os.path.join(train_dir, "*"))
     num_class0 = 0
     num_class1 = 0
     for exp in experiments:
         file_name = os.path.join(exp, "labels.txt")
         try:
             labels = np.loadtxt(file_name, usecols=0)
-            num_class1 += np.sum(labels == 1)
-            num_class0 += np.sum(labels == 0)
+            # Handle case where labels file might be empty or malformed
+            if labels.size > 0:
+                # If labels is a scalar (single file entry), make it iterable
+                if labels.ndim == 0:
+                    labels = np.array([labels])
+                num_class1 += np.sum(labels == 1)
+                num_class0 += np.sum(labels == 0)
         except:
             print("File {} failed loading labels".format(file_name)) 
             continue
@@ -139,7 +146,14 @@ def weighted_baseline(real_values, samples_per_class):
     instances labeled as 1, a weighted classifier randomly assigns x% of the
     labels to class 0, and the remaining (1-x)% to class 1.
     """
-    weights = samples_per_class/np.sum(samples_per_class)
+    # Fix for division by zero if no training samples are found
+    total = np.sum(samples_per_class)
+    if total == 0:
+        print("Warning: No training samples found for baseline calculation. Defaulting to uniform weights.")
+        weights = [0.5, 0.5]
+    else:
+        weights = samples_per_class/total
+        
     return np.random.choice(2, real_values.shape[0], p=weights)
 
 
@@ -147,7 +161,13 @@ def majority_class_baseline(real_values, samples_per_class):
     """
     Classify all test data as the most common label
     """
-    major_class = np.argmax(samples_per_class)
+    # Fix for empty training data
+    if np.sum(samples_per_class) == 0:
+        print("Warning: No training samples found. Defaulting majority class to 0.")
+        major_class = 0
+    else:
+        major_class = np.argmax(samples_per_class)
+        
     return [major_class for i in real_values]
 
             
@@ -193,6 +213,77 @@ def plot_pr_curve(real_labels, pred_prob, fname):
         print(f"Error: Could not plot or save PR curve: {e}")
 
 
+def plot_confusion_matrix(real_labels, pred_labels, fname):
+    """
+    Generates and saves a visual Confusion Matrix using Matplotlib.
+    """
+    if not MATPLOTLIB_AVAILABLE:
+        return
+
+    try:
+        cm = metrics.confusion_matrix(real_labels, pred_labels)
+        
+        # Create title based on filename (e.g., remove .json and directory)
+        base_name = os.path.basename(fname).replace('.json', '')
+        
+        plt.figure(figsize=(8, 6))
+        plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+        
+        title = f'Confusion Matrix for {base_name}'
+        plt.title(title, fontsize=14, pad=20)
+        
+        plt.colorbar()
+        
+        # Set tick positions
+        tick_marks = np.arange(2)
+        plt.xticks(tick_marks)
+        plt.yticks(tick_marks)
+
+        # Add descriptive text annotations to each quadrant
+        # Top-left: True Negatives (Actual Safe, Predicted Safe)
+        plt.text(0, 0, f'True Neg (Safe)\n{cm[0, 0]}',
+                 horizontalalignment="center",
+                 verticalalignment="center",
+                 color="white" if cm[0, 0] > cm.max() / 2. else "black",
+                 fontsize=11)
+        
+        # Top-right: False Positives (Actual Safe, Predicted Crash)
+        plt.text(1, 0, f'False Pos (Safe->Crash)\n{cm[0, 1]}',
+                 horizontalalignment="center",
+                 verticalalignment="center",
+                 color="white" if cm[0, 1] > cm.max() / 2. else "black",
+                 fontsize=11)
+        
+        # Bottom-left: False Negatives (Actual Crash, Predicted Safe)
+        plt.text(0, 1, f'False Neg (Crash->Safe)\n{cm[1, 0]}',
+                 horizontalalignment="center",
+                 verticalalignment="center",
+                 color="white" if cm[1, 0] > cm.max() / 2. else "black",
+                 fontsize=11)
+        
+        # Bottom-right: True Positives (Actual Crash, Predicted Crash)
+        plt.text(1, 1, f'True Pos (Crash)\n{cm[1, 1]}',
+                 horizontalalignment="center",
+                 verticalalignment="center",
+                 color="white" if cm[1, 1] > cm.max() / 2. else "black",
+                 fontsize=11)
+
+        plt.ylabel('Actual Safe                                        Actual Crash', fontsize=12)
+        plt.xlabel('Predicted Label', fontsize=12)
+        
+        # Add more space around the plot
+        plt.tight_layout()
+
+        # Save plot
+        plot_fname = os.path.splitext(fname)[0] + '_cm.png'
+        plt.savefig(plot_fname, dpi=150, bbox_inches='tight')
+        print(f"Confusion Matrix plot saved to {plot_fname}")
+        plt.close()
+    
+    except Exception as e:
+        print(f"Error plotting confusion matrix for {fname}: {e}")
+
+
 def evaluate_classification(pred_prob, pred_labels, real_labels, fname):
     # Standard Metrics
     ave_accuracy = metrics.accuracy_score(real_labels, pred_labels)
@@ -204,12 +295,12 @@ def evaluate_classification(pred_prob, pred_labels, real_labels, fname):
     f_score = metrics.f1_score(real_labels, pred_labels)
     print('F1-score = ', f_score)
     
-    # --- NEW: Confusion Matrix Logic ---
+    # --- Confusion Matrix Logic ---
     # 0 = No Collision (Safe), 1 = Collision
     try:
         cm = metrics.confusion_matrix(real_labels, pred_labels)
         
-        # Handle cases where the matrix might not be 2x2 (e.g., if only 1 class exists in data)
+        # Handle cases where the matrix might not be 2x2
         if cm.shape == (2, 2):
             tn, fp, fn, tp = cm.ravel()
             print('\n--- CONFUSION MATRIX for {} ---'.format(fname))
@@ -223,14 +314,16 @@ def evaluate_classification(pred_prob, pred_labels, real_labels, fname):
             
     except Exception as e:
         print("Could not print detailed confusion matrix: {}".format(e))
-    # -----------------------------------
+
+    # --- NEW: Generate Visual Confusion Matrix ---
+    # This will run for all calls (Model, Random, Weighted, Majority)
+    plot_confusion_matrix(real_labels, pred_labels, fname)
+    # ---------------------------------------------
     
-    # --- NEW: Plot Precision-Recall Curve ---
-    # We only want to plot the PR curve for the *actual model test*, 
-    # not for the random baseline.
+    # --- Plot Precision-Recall Curve ---
+    # We only want to plot the PR curve for the *actual model test*
     if 'test_classification' in fname:
         plot_pr_curve(real_labels, pred_prob, fname)
-    # ----------------------------------------
 
     highest_errors = compute_highest_classification_errors(pred_prob, real_labels,
             n_errors=20)
@@ -336,18 +429,26 @@ def _main():
     else:
         real_labels = ground_truth[~t_mask, 1]
 
-    # Compute random, weighted and majorirty-class baselines for collision
+    # --- Compute all baselines ---
     random_labels = random_classification_baseline(real_labels)
-
-    # Create dictionary with filenames
+    
+    print("Counting samples per class in training set for baselines...")
+    samples_per_class = count_samples_per_class(FLAGS.train_dir)
+    
+    weighted_labels = weighted_baseline(real_labels, samples_per_class)
+    majority_labels = majority_class_baseline(real_labels, samples_per_class)
+    
+    # --- Create dictionary with ALL filenames ---
+    # The loop below will pass these to evaluate_classification, 
+    # which will now generate confusion matrix plots for each.
     dict_fname = {'test_classification.json': pred_labels,
-                  'random_classification.json': random_labels}
-
+                  'random_classification.json': random_labels,
+                  'weighted_classification.json': weighted_labels,
+                  'majority_classification.json': majority_labels}
+    
     # Evaluate predictions: accuracy, precision, recall, F1-score, and highest errors
     for fname, pred in dict_fname.items():
         abs_fname = os.path.join(FLAGS.experiment_rootdir, fname)
-        # We pass pred_prob (raw model probabilities) to be used for the PR curve
-        # and pred (thresholded labels) to be used for the confusion matrix/metrics
         evaluate_classification(pred_prob, pred, real_labels, abs_fname)
 
     # Write predicted probabilities and real labels
