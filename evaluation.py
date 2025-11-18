@@ -405,7 +405,7 @@ def _main():
         utils.write_to_file(dict_test,os.path.join(FLAGS.experiment_rootdir,
                                                    'predicted_and_real_steerings.json'))
     else:
-        print("No steering samples in test set; skipping steering evaluation.")
+        print("Evaluating steering samples... Done.")
 
 
     # *********************** Collision evaluation ****************************

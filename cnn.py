@@ -3,6 +3,7 @@ import numpy as np
 import os
 import sys
 import gflags
+import cv2  # --- ADDED: Required for weather simulation ---
 
 from keras.callbacks import ModelCheckpoint
 from keras import optimizers
@@ -13,6 +14,32 @@ import utils
 import log_utils
 from common_flags import FLAGS
 
+
+def add_synthetic_weather(image):
+    """
+    Simulates adverse weather conditions to improve model robustness.
+    - Fog: Applied via Gaussian Blur
+    - Rain: Applied via Salt-and-Pepper Noise
+    NOTE: Keras preprocessing usually runs on 0-255 inputs before rescaling.
+    Adjusted noise calculation to ensure visibility on 0-255 or 0-1 data.
+    """
+    weather_roll = np.random.rand()
+
+    # 15% Chance of Fog
+    if weather_roll < 0.15:
+        return cv2.GaussianBlur(image, (7, 7), 0)
+
+    # 15% Chance of Rain/Static
+    elif weather_roll < 0.30:
+        # Check if image is 0-1 or 0-255 to apply correct noise scale
+        if np.max(image) > 1.0:
+            noise = np.random.normal(0, 15, image.shape) # Scale for 0-255
+            return np.clip(image + noise, 0, 255)
+        else:
+            noise = np.random.normal(0, 0.05, image.shape) # Scale for 0-1
+            return np.clip(image + noise, 0, 1)
+
+    return image
 
 
 def getModel(img_width, img_height, img_channels, output_dim, weights_path):
@@ -128,14 +155,18 @@ def _main():
     output_dim = 1
 
     # Generate training data with real-time augmentation
-    # --- CHANGED: Added photometric (brightness, zoom) augmentations ---
-    train_datagen = utils.DroneDataGenerator(rotation_range = 0.2,
-                                             rescale = 1./255,
-                                             width_shift_range = 0.2,
-                                             height_shift_range=0.2,
-                                            brightness_range=[0.7, 1.3], # Simulates shadows/sun
-                                             zoom_range=[0.9, 1.1]       # Simulates distance
-                                             )
+    # --- CHANGED: Merged Original params with PROPOSED UPGRADE params ---
+    train_datagen = utils.DroneDataGenerator(
+        rotation_range = 0.2, # Kept original format (likely equivalent to 20 degrees depending on impl)
+        rescale = 1./255,
+        width_shift_range = 0.2,
+        height_shift_range = 0.2,
+        # --- NEW AUGMENTATIONS ---
+        #brightness_range=[0.5, 1.5],  # Critical for dawn/dusk flight
+        zoom_range=[0.8, 1.2],        # Critical for obstacle scale invariance
+        #preprocessing_function=add_synthetic_weather, # Custom rain/fog simulation
+        # horizontal_flip=True        # WARNING: Only enable if utils.DroneDataGenerator flips steering labels too!
+    )
     # --------------------------------------------------------------------
 
     train_generator = train_datagen.flow_from_directory(FLAGS.train_dir,

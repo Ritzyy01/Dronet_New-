@@ -381,9 +381,14 @@ def hard_mining_entropy(k, class_weights_dict):
             # Create a tensor of weights based on the true labels
             weights = tf.ones_like(true_coll) # Start with weight 1 for all
             # Set weight for class 0
-            weights = tf.where(tf.equal(true_coll, 0), class_weights_dict[0], weights)
             # Set weight for class 1
-            weights = tf.where(tf.equal(true_coll, 1), class_weights_dict[1], weights)
+            # NEW / FIXED CODE
+# We create a tensor of '1s' that matches the shape of your batch
+            ones_tensor = tf.ones_like(true_coll, dtype=tf.float32)
+
+# We multiply the scalar (0.64) by the ones_tensor to turn it into a Vector
+            weights = tf.where(tf.equal(true_coll, 0), class_weights_dict[0] * ones_tensor, weights)
+            weights = tf.where(tf.equal(true_coll, 1), class_weights_dict[1] * ones_tensor, weights)
             # --------------------------------
 
             # Calculate base collision loss
